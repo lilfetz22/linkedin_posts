@@ -11,6 +11,7 @@ import numpy as np
 from sklearn.metrics import pairwise_distances
 import networkx as nx
 import matplotlib.pyplot as plt
+import folium
 
 
 def create_distance_based_adj_matrix(
@@ -83,10 +84,19 @@ def visualize_graph(adjacency_matrix: np.ndarray, locations_df: pd.DataFrame):
     plt.show()
 
 
-# --- Main execution block ---
+# --- Re-using the functions from the previous step ---
+# def create_distance_based_adj_matrix(locations_df, threshold, add_self_loops=False):
+#     coords = np.radians(locations_df[['latitude', 'longitude']].values)
+#     dist_matrix = pairwise_distances(coords, metric='haversine')
+#     dist_matrix_km = dist_matrix * 6371
+#     adjacency_matrix = (dist_matrix_km <= threshold).astype(int)
+#     if not add_self_loops:
+#         np.fill_diagonal(adjacency_matrix, 0)
+#     return adjacency_matrix
+
+# --- Main execution block with new visualization ---
 if __name__ == "__main__":
     # Step 1: Simulate sensor location data
-    # Let's create a dummy dataset of 10 sensors scattered around a city area
     data = {
         "sensor_id": [f"S{i}" for i in range(10)],
         "latitude": [
@@ -115,24 +125,70 @@ if __name__ == "__main__":
         ],
     }
     locations_df = pd.DataFrame(data)
-    print("--- Input Sensor Locations ---")
-    print(locations_df)
-    print("-" * 30)
 
-    # Step 2: Define the distance threshold for building the graph
-    # Let's say we want to connect sensors that are within 2.5 kilometers of each other.
+    # Step 2: Define the distance threshold
     DISTANCE_THRESHOLD_KM = 2.5
-    print(f"Distance Threshold: {DISTANCE_THRESHOLD_KM} km\n")
 
     # Step 3: Create the adjacency matrix
     adjacency_matrix = create_distance_based_adj_matrix(
-        locations_df, threshold=DISTANCE_THRESHOLD_KM
+        locations_df, DISTANCE_THRESHOLD_KM
     )
 
-    print(f"--- Generated Adjacency Matrix (shape: {adjacency_matrix.shape}) ---")
-    print(adjacency_matrix)
-    print("-" * 30)
+    # --- NEW VISUALIZATION LOGIC ---
 
-    # Step 4: Visualize the resulting graph
-    print("Generating graph visualization...")
-    visualize_graph(adjacency_matrix, locations_df)
+    # Step 4: Create a NetworkX graph to calculate node degrees for sizing
+    G = nx.from_numpy_array(adjacency_matrix)
+    degrees = [val for (node, val) in G.degree()]
+
+    # Step 5: Create the interactive map with Folium
+    # Center the map on the average lat/lon of our sensors
+    map_center = [locations_df["latitude"].mean(), locations_df["longitude"].mean()]
+    m = folium.Map(location=map_center, zoom_start=13, tiles="CartoDB positron")
+
+    # Add edges (connections) to the map as lines
+    for i in range(adjacency_matrix.shape[0]):
+        for j in range(
+            i + 1, adjacency_matrix.shape[1]
+        ):  # Avoid duplicates and self-loops
+            if adjacency_matrix[i, j] == 1:
+                loc1 = (
+                    locations_df.iloc[i]["latitude"],
+                    locations_df.iloc[i]["longitude"],
+                )
+                loc2 = (
+                    locations_df.iloc[j]["latitude"],
+                    locations_df.iloc[j]["longitude"],
+                )
+                folium.PolyLine(
+                    locations=[loc1, loc2], color="gray", weight=1.5, opacity=0.8
+                ).add_to(m)
+
+    # Add nodes to the map
+    for i, row in locations_df.iterrows():
+        # Improvement 3: Visualize the connection radius
+        folium.Circle(
+            location=(row["latitude"], row["longitude"]),
+            radius=DISTANCE_THRESHOLD_KM * 1000,  # Radius in meters
+            color="skyblue",
+            fill=True,
+            fill_opacity=0.1,
+            weight=0,
+        ).add_to(m)
+
+        # Improvement 2: Vary node size by degree (connectivity)
+        node_radius = 5 + degrees[i] * 4  # Base size + size based on # of connections
+
+        # Add the actual node marker
+        folium.CircleMarker(
+            location=(row["latitude"], row["longitude"]),
+            radius=node_radius,
+            popup=f"Sensor {i}<br>Connections: {degrees[i]}",
+            color="#0077B5",  # A nice LinkedIn blue
+            fill=True,
+            fill_color="#3DA9DE",
+            fill_opacity=0.9,
+        ).add_to(m)
+
+    # Save the map to an HTML file
+    m.save("spatio_temporal_graph_map.html")
+    print("Interactive map saved to spatio_temporal_graph_map.html")
